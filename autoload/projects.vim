@@ -1,3 +1,5 @@
+let s:nvim = has('nvim')
+
 let s:res = []
 let s:tabId = 0
 let s:bufId = 0
@@ -23,23 +25,35 @@ function! s:bufNew()
 	let s:bufId = bufnr()
 endfunction
 
-function! s:OnStdOut(job_id, data, event) dict
-	call add(s:res, a:data[0])
+function! s:JobCb(fn, ch, data) abort
+	call call(a:fn, [a:data])
 endfunction
 
-function! s:OnExit(job_id, data, event) dict
+function! s:NvimCb(job_id, data, event) dict abort
+	if a:event == 'stdout'
+		call s:OnStdOut(a:data[0])
+	elseif a:event == 'exit'
+		call s:OnExit(a:data)
+	endif
+endfunction
+
+function! s:OnStdOut(data)
+	call add(s:res, a:data)
+endfunction
+
+function! s:OnExit(data)
 	call execute('set noro ma')
 	let projects = json_decode(join(s:res, ''))
-	let count = 0
+	let i = 0
 	for project in projects
-		let count += 1
-		let s:projects[count] = {
+		let i += 1
+		let s:projects[i] = {
 		\ 'name': project.name,
 		\ 'url': project.url,
 		\ }
 		let project.success_condition = substitute(substitute(project.success_condition, 'all_in', 'ALL IN', 'g'), 'all_or_nothing', 'ALL OR', 'g')
 		let line = [printf('%-6s', project.success_condition), printf('%5d%%%5s', project.success_rate, ' '), printf('%s', trim(project.name))]
-		call setbufline(s:bufId, count, join(line, ''))
+		call setbufline(s:bufId, i, join(line, ''))
 	endfor
 	call execute('set noma ro')
 	syntax match campfire_allin /^ALL\sIN/
@@ -56,9 +70,14 @@ function! s:projectOpen()
 	call system(printf('open %s', project.url))
 endfunction
 
-let s:callbacksCampfire = {
-\ 'on_stdout': function('s:OnStdOut'),
-\ 'on_exit': function('s:OnExit'),
+let s:vimCallbacks = {
+\ 'out_cb': function('s:JobCb', ['s:OnStdOut']),
+\ 'exit_cb': function('s:JobCb', ['s:OnExit']),
+\ }
+
+let s:nvimCallbacks = {
+\ 'on_stdout': function('s:NvimCb'),
+\ 'on_exit': function('s:NvimCb'),
 \ }
 
 function! s:displayProjects(option)
@@ -66,7 +85,11 @@ function! s:displayProjects(option)
 	if a:option == 'fresh'
 		let url = s:endpoint.fresh
 	endif
-	let job = jobstart(['curl', '--silent', url], s:callbacksCampfire)
+	if s:nvim
+		let job = jobstart(['curl', '--silent', url], s:nvimCallbacks)
+	else
+		let job = job_start(['curl', '--silent', url], s:vimCallbacks)
+	endif
 endfunction
 
 function! projects#Fetch(...)
